@@ -1,4 +1,4 @@
-#include "api/BamMultiReader.h"
+#include "api/BamReader.h"
 #include "api/BamWriter.h"
 #include "foundation_AMOS.hh"
 #include "amp.hh"
@@ -8,6 +8,7 @@
 #include <string>
 #include <map>
 #include <utility>
+#include <vector>
 
 //using namespace BamTools;
 //using namespace AMOS;
@@ -29,7 +30,7 @@ std::string reverseComplement(std::string& str)
 	int l = static_cast<int>(str.length());
     char * revcomp_str = new char[l+1];
     for (int i = 0; i <=l; i++) {
-		revcomp_str[i]=NULL;
+		revcomp_str[i]='\0';
     }
     int i, c0, c1;
     for (i = 0; i < l>>1; ++i) 
@@ -72,8 +73,8 @@ int main(int argc, char ** argv) {
     AMOS::BankStream_t library_bank(AMOS::Library_t::NCODE);
     AMOS::BankStream_t fragment_bank(AMOS::Fragment_t::NCODE);
     
-    if (argc != 3) {
-        std::cout<<"sam2amos { file.bnk | - } file.bam"<<std::endl;
+    if (argc != 4) {
+        std::cout<<"sam2amos (file.bnk | - ) <file.fa> <file.bam>"<<std::endl;
         return EXIT_FAILURE;
     }
     std::string bank_name = argv[1];
@@ -100,8 +101,7 @@ int main(int argc, char ** argv) {
         }
         AMOS::ID_t read_id = 0;
         
-        std::string inputFilename;
-        std::string outputFilename;
+        std::string inputFilename = argv[3];
         // provide some input & output filenames
         // attempt to open our BamMultiReader
         BamTools::BamReader reader;
@@ -173,6 +173,8 @@ int main(int argc, char ** argv) {
         // messages as appropriate
         BamTools::BamAlignment al;
         while ( reader.GetNextAlignmentCore(al) ) {
+            al.BuildCharData();
+
             if (al.IsReverseStrand()) {
                 al.QueryBases = reverseComplement(al.QueryBases);
                 std::reverse(al.Qualities.begin(),al.Qualities.end());
@@ -187,7 +189,7 @@ int main(int argc, char ** argv) {
             // if the read is paired then we need to add
             // this read to a fragment, if one exists,
             // or make a new fragment
-            if (!al.IsPaired()) {
+            if (al.IsPaired()) {
                 std::string normalized_name = normalizeName(al.Name);
                 FragmentMap_t::iterator fm_iter = fragment_map.find(normalized_name);
                 if (fm_iter != fragment_map.end()) {
