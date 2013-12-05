@@ -9,6 +9,8 @@
 #include <map>
 #include <utility>
 #include <vector>
+#include <cstring>
+#include <getopt.h>
 
 //using namespace BamTools;
 //using namespace AMOS;
@@ -54,13 +56,50 @@ std::string reverseComplement(std::string& str)
 std::string normalizeName(std::string& str) {
     // get the last two characters and see if they end in .f or .r
     std::string sub = str.substr(str.length() - 2);
-    std::cout <<sub<<std::endl;
+    //std::cout <<sub<<std::endl;
     if (sub == ".f" || sub == ".r") {
         return str.substr(0, str.length() - 2);
     }
     return str;
 }
 
+void usage() {
+    std::cout<<"sam2amos [options] <file.fa> <file.bam> [file.bnk]"<<std::endl;
+    std::cout<<"-h          This help message\n";
+    std::cout<<"-a INT      Average insert size for the library when \n";
+    std::cout<<"            the bam file contains paired reads\n";
+    std::cout<<"-s INT      The standard deviation of the insert size\n";
+    std::cout<<"            for the library"<<std::endl;
+}
+
+int processOptions(int argc, char *argv[], int& ave, int& stdev)
+{
+    int c;
+    int index;
+    static struct option long_options [] = {
+        {"help", no_argument, NULL, 'h'},
+        {"average-insert",required_argument,NULL,'a'},
+        {"stdev-insert",required_argument,NULL,'s'}
+    };
+
+    while( (c = getopt_long(argc, argv, "ha:s:", long_options, &index)) != -1 ) 
+    {
+        switch(c) 
+        {
+            case 'a':
+                ave = atoi(optarg);
+                break;
+           case 's':
+                stdev = atoi(optarg);
+                break;
+          case 'h':
+          default:
+                usage();
+                exit(1);
+        }
+    }
+    return optind;
+}
 
 int main(int argc, char ** argv) {
 
@@ -73,15 +112,31 @@ int main(int argc, char ** argv) {
     AMOS::BankStream_t library_bank(AMOS::Library_t::NCODE);
     AMOS::BankStream_t fragment_bank(AMOS::Fragment_t::NCODE);
     
-    if (argc != 4) {
-        std::cout<<"sam2amos (file.bnk | - ) <file.fa> <file.bam>"<<std::endl;
+    if (argc < 3) {
+        usage();
         return EXIT_FAILURE;
     }
-    std::string bank_name = argv[1];
-    
-    // Write to stdout if the bank_name is "-", otherwise write the binary
-    // objects directly to a bank named bank_name.
-    bool printmsg = (bank_name == "-");
+    int library_mean = 0, library_stdev = 0;
+    int opt_idx = processOptions(argc, argv, library_mean, library_stdev);
+    if(opt_idx >= argc) {
+        usage();
+        return EXIT_FAILURE;
+    }
+    std::string fa_file = argv[opt_idx];
+    if(opt_idx >= argc) {
+        usage();
+        return EXIT_FAILURE;
+    }
+    opt_idx++;
+    std::string bam_file = argv[opt_idx];
+
+    bool printmsg = false; 
+    std::string bank_name;
+    opt_idx++;
+    if(opt_idx >=argc || !strcmp(argv[opt_idx], "-"))
+        printmsg = true;
+    else
+        bank_name = argv[opt_idx];
     
     AMOS::Read_t read; 
     AMOS::Contig_t contig;
@@ -101,11 +156,10 @@ int main(int argc, char ** argv) {
         }
         AMOS::ID_t read_id = 0;
         
-        std::string inputFilename = argv[3];
         // provide some input & output filenames
         // attempt to open our BamMultiReader
         BamTools::BamReader reader;
-        if ( !reader.Open(inputFilename) ) {
+        if ( !reader.Open(bam_file) ) {
             std::cerr << "Could not open input BAM files." << std::endl;
             return 1; 
         }
@@ -147,6 +201,13 @@ int main(int argc, char ** argv) {
         } else {
             // we still need to make a libray
             library.setIID(1);
+            if(library_mean) {
+                dist.mean = library_mean;
+            }
+            if(library_stdev) {
+                dist.sd = library_stdev;
+            }
+            library.setDistribution(dist);
             if (printmsg) { library.writeMessage(msg); msg.write(std::cout); }
             else          { library_bank << library; }
         }
@@ -259,7 +320,7 @@ int main(int argc, char ** argv) {
         }
         
         // now go through the fasta file and get the contig sequences
-        gzFile fp = gzopen(argv[2], "r");
+        gzFile fp = gzopen(fa_file.c_str(), "rb");
         kseq_t * seq;
         
         seq = kseq_init(fp);
@@ -268,7 +329,7 @@ int main(int argc, char ** argv) {
             ContigMapID_t::iterator ctg_iter;
             ctg_iter = contig_map.find(seq->name.s);
             
-            if(ctg_iter != contig_map.end()) {
+            if(ctg_iter == contig_map.end()) {
                 contig.clear();
                 contig.setIID(ctg_iter->second);
                 contig.setEID(seq->name.s);
