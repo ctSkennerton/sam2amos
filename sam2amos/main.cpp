@@ -1,5 +1,4 @@
-#include "api/BamReader.h"
-#include "api/BamWriter.h"
+#include "api/BamMultiReader.h"
 #include "foundation_AMOS.hh"
 #include "amp.hh"
 #include "StlExt.h"
@@ -64,32 +63,51 @@ std::string normalizeName(std::string& str) {
 }
 
 void usage() {
-    std::cout<<"sam2amos [options] <file.fa> <file.bam> [file.bnk]"<<std::endl;
+    std::cout<<"sam2amos [options] <file.fa> <file.bam>...\n";
     std::cout<<"-h          This help message\n";
+    std::cout<<"-b FILE     Output to bank file.  Default is to print\n";
+    std::cout<<"            amos messages to screen\n";
+    std::cout<<"-f INT      flags that must be set to output alignment\n";
+    std::cout<<"            ALL bits must be set in alignment. default: 0\n";
+    std::cout<<"-F INT      flags that must not be set to output alignment\n";
+    std::cout<<"            if ANY bits are set alignment will not be outputted\n";
+    std::cout<<"            Default: 0x900\n";
     std::cout<<"-a INT      Average insert size for the library when \n";
     std::cout<<"            the bam file contains paired reads\n";
     std::cout<<"-s INT      The standard deviation of the insert size\n";
     std::cout<<"            for the library"<<std::endl;
 }
 
-int processOptions(int argc, char *argv[], int& ave, int& stdev)
+int processOptions(int argc, char *argv[], int& ave, int& stdev, std::string& bankFile, int& rejectFlag, int& acceptFlag)
 {
     int c;
     int index;
     static struct option long_options [] = {
         {"help", no_argument, NULL, 'h'},
+        {"bank",required_argument,NULL,'b'},
         {"average-insert",required_argument,NULL,'a'},
-        {"stdev-insert",required_argument,NULL,'s'}
+        {"stdev-insert",required_argument,NULL,'s'},
+        {"reject-flag",required_argument,NULL,'F'},
+        {"accept-flag",required_argument,NULL,'f'}
     };
 
-    while( (c = getopt_long(argc, argv, "ha:s:", long_options, &index)) != -1 ) 
+    while( (c = getopt_long(argc, argv, "F:f:hb:a:s:", long_options, &index)) != -1 ) 
     {
         switch(c) 
         {
             case 'a':
                 ave = atoi(optarg);
                 break;
-           case 's':
+            case 'b':
+                bankFile = optarg;
+                break;
+            case 'f':
+                acceptFlag = (int)strtol(optarg, NULL, 0);
+                break;
+            case 'F':
+                rejectFlag = (int)strtol(optarg, NULL, 0);
+                break;
+            case 's':
                 stdev = atoi(optarg);
                 break;
           case 'h':
@@ -116,8 +134,9 @@ int main(int argc, char ** argv) {
         usage();
         return EXIT_FAILURE;
     }
-    int library_mean = 0, library_stdev = 0;
-    int opt_idx = processOptions(argc, argv, library_mean, library_stdev);
+    int library_mean = 0, library_stdev = 0, accept_flag = 0, reject_flag = 2304;
+    std::string bank_name;
+    int opt_idx = processOptions(argc, argv, library_mean, library_stdev, bank_name, reject_flag, accept_flag);
     if(opt_idx >= argc) {
         usage();
         return EXIT_FAILURE;
@@ -128,15 +147,20 @@ int main(int argc, char ** argv) {
         return EXIT_FAILURE;
     }
     opt_idx++;
-    std::string bam_file = argv[opt_idx];
 
-    bool printmsg = false; 
-    std::string bank_name;
-    opt_idx++;
-    if(opt_idx >=argc || !strcmp(argv[opt_idx], "-"))
-        printmsg = true;
-    else
-        bank_name = argv[opt_idx];
+    std::vector<std::string> bam_files;
+    while(opt_idx < argc) {
+        bam_files.push_back(argv[opt_idx]);
+        opt_idx++;
+    }
+
+    if(accept_flag & reject_flag) {
+        std::cout<<"Bits are set for both accept and reject"<<std::endl;
+        usage();
+        return EXIT_FAILURE;
+    }
+
+    bool printmsg = bank_name.empty() ? true : false; 
     
     AMOS::Read_t read; 
     AMOS::Contig_t contig;
@@ -158,8 +182,8 @@ int main(int argc, char ** argv) {
         
         // provide some input & output filenames
         // attempt to open our BamMultiReader
-        BamTools::BamReader reader;
-        if ( !reader.Open(bam_file) ) {
+        BamTools::BamMultiReader reader;
+        if ( !reader.Open(bam_files) ) {
             std::cerr << "Could not open input BAM files." << std::endl;
             return 1; 
         }
@@ -234,6 +258,14 @@ int main(int argc, char ** argv) {
         // messages as appropriate
         BamTools::BamAlignment al;
         while ( reader.GetNextAlignmentCore(al) ) {
+            if(al.AlignmentFlag & accept_flag != accept_flag) {
+                continue;
+            }
+            
+            if(al.AlignmentFlag & reject_flag) {
+                continue;
+            }
+
             al.BuildCharData();
 
             if (al.IsReverseStrand()) {
@@ -242,8 +274,6 @@ int main(int argc, char ** argv) {
             }
             // Internal IDs must be numeric (IID)
             read.setIID(++read_id);
-            
-            read.setEID(al.Name);
             read.setSequence(al.QueryBases, al.Qualities);
             read.setType('E');
             
@@ -251,8 +281,15 @@ int main(int argc, char ** argv) {
             // this read to a fragment, if one exists,
             // or make a new fragment
             if (al.IsPaired()) {
-                std::string normalized_name = normalizeName(al.Name);
-                FragmentMap_t::iterator fm_iter = fragment_map.find(normalized_name);
+                std::string name;
+                if(al.IsFirstMate()) {
+                    name = al.Name + "/1";
+                } else {
+                    name = al.Name + "/2";
+                }
+                read.setEID(name);
+                //std::string normalized_name = normalizeName(al.Name);
+                FragmentMap_t::iterator fm_iter = fragment_map.find(al.Name);
                 if (fm_iter != fragment_map.end()) {
                     // one of the fragments already exists
                     // get the name of the other one from the map
@@ -269,7 +306,7 @@ int main(int argc, char ** argv) {
                     AMOS::Fragment_t frg;
                     frg.setIID(++fragment_id);
                     frg.setType('I');
-                    frg.setEID(normalized_name);
+                    frg.setEID(al.Name);
                     
                     // the libraries relate to the @RG tag
                     // no @RG, set to one
@@ -281,9 +318,11 @@ int main(int argc, char ** argv) {
                         frg.setLibrary(1);
                     }
                     
-                    fragment_map.insert(std::make_pair(normalized_name, std::make_pair(frg,read_id)));
+                    fragment_map.insert(std::make_pair(al.Name, std::make_pair(frg,read_id)));
                 }
                 
+            } else {
+                read.setEID(al.Name);
             }
             // print out the read msg
             if (printmsg) { read.writeMessage(msg); msg.write(std::cout); }
@@ -337,7 +376,7 @@ int main(int argc, char ** argv) {
                 contig.setReadTiling(tiling_map[ctg_iter->second]);
                 // print out the contig msg
                 if (printmsg) { contig.writeMessage(msg); msg.write(std::cout); }
-                else          { contig_bank << read; }
+                else          { contig_bank << contig; }
                 
                 // clean up since we're done with this contig
                 contig_map.erase(ctg_iter);
