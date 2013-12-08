@@ -277,6 +277,8 @@ int main(int argc, char ** argv) {
             read.setSequence(al.QueryBases, al.Qualities);
             read.setType('E');
             
+            contig_map[references[al.RefID].RefName] = al.RefID;
+
             // if the read is paired then we need to add
             // this read to a fragment, if one exists,
             // or make a new fragment
@@ -368,7 +370,7 @@ int main(int argc, char ** argv) {
             ContigMapID_t::iterator ctg_iter;
             ctg_iter = contig_map.find(seq->name.s);
             
-            if(ctg_iter == contig_map.end()) {
+            if(ctg_iter != contig_map.end()) {
                 contig.clear();
                 contig.setIID(ctg_iter->second);
                 contig.setEID(seq->name.s);
@@ -382,6 +384,9 @@ int main(int argc, char ** argv) {
                 contig_map.erase(ctg_iter);
             }
         }
+
+        kseq_destroy(seq);
+        gzclose(fp);
                 
         if (!printmsg)
         {
