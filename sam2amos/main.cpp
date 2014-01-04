@@ -91,7 +91,7 @@ int processOptions(int argc, char *argv[], int& ave, int& stdev, std::string& ba
         {"accept-flag",required_argument,NULL,'f'}
     };
 
-    while( (c = getopt_long(argc, argv, "F:f:hb:a:s:", long_options, &index)) != -1 ) 
+    while( (c = getopt_long(argc, argv, "F:f:hb:a:s:c", long_options, &index)) != -1 ) 
     {
         switch(c) 
         {
@@ -110,8 +110,8 @@ int processOptions(int argc, char *argv[], int& ave, int& stdev, std::string& ba
             case 's':
                 stdev = atoi(optarg);
                 break;
-          case 'h':
-          default:
+            case 'h':
+            default:
                 usage();
                 exit(1);
         }
@@ -178,7 +178,7 @@ int main(int argc, char ** argv) {
             library_bank.create(bank_name);
             fragment_bank.create(bank_name);
         }
-        AMOS::ID_t read_id = 0;
+        AMOS::ID_t read_id = 1;
         
         // provide some input & output filenames
         // attempt to open our BamMultiReader
@@ -252,7 +252,7 @@ int main(int argc, char ** argv) {
         typedef std::map<int32_t, std::vector<AMOS::Tile_t> > TilingMap_t;
         TilingMap_t tiling_map;
         
-        AMOS::ID_t fragment_id = 0;
+        AMOS::ID_t fragment_id = 1;
         
         // iterate through all alignments, creating read, fragment and tiling
         // messages as appropriate
@@ -277,7 +277,7 @@ int main(int argc, char ** argv) {
             read.setSequence(al.QueryBases, al.Qualities);
             read.setType('E');
             
-            contig_map[references[al.RefID].RefName] = al.RefID;
+            contig_map[references[al.RefID].RefName] = al.RefID + 1;
 
             // if the read is paired then we need to add
             // this read to a fragment, if one exists,
@@ -296,7 +296,7 @@ int main(int argc, char ** argv) {
                     // one of the fragments already exists
                     // get the name of the other one from the map
                     fm_iter->second.first.setReads(std::make_pair(read_id, fm_iter->second.second));
-                    
+                    read.setFragment(fm_iter->second.first.getIID());
                     // print out the fragment msg
                     if (printmsg) { fm_iter->second.first.writeMessage(msg); msg.write(std::cout); }
                     else          { fragment_bank << fm_iter->second.first; }
@@ -309,7 +309,7 @@ int main(int argc, char ** argv) {
                     frg.setIID(++fragment_id);
                     frg.setType('I');
                     frg.setEID(al.Name);
-                    
+                    read.setFragment(frg.getIID());
                     // the libraries relate to the @RG tag
                     // no @RG, set to one
                     if (al.HasTag("RG")) {
@@ -320,7 +320,7 @@ int main(int argc, char ** argv) {
                         frg.setLibrary(1);
                     }
                     
-                    fragment_map.insert(std::make_pair(al.Name, std::make_pair(frg,read_id)));
+                    fragment_map[al.Name] = std::make_pair(frg, read_id);
                 }
                 
             } else {
